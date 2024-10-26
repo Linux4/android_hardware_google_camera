@@ -23,63 +23,22 @@
 #include <utils/Log.h>
 
 #include <cmath>
+#include <string>
 
 // TODO: This should probably be done host-side in OpenGL for speed and better
 // quality
 
 namespace android {
 
-// Define single-letter shortcuts for scene definition, for directly indexing
-// mCurrentColors
-#define G (EmulatedScene::GRASS * EmulatedScene::NUM_CHANNELS)
-#define S (EmulatedScene::GRASS_SHADOW * EmulatedScene::NUM_CHANNELS)
-#define H (EmulatedScene::HILL * EmulatedScene::NUM_CHANNELS)
-#define W (EmulatedScene::WALL * EmulatedScene::NUM_CHANNELS)
-#define R (EmulatedScene::ROOF * EmulatedScene::NUM_CHANNELS)
-#define D (EmulatedScene::DOOR * EmulatedScene::NUM_CHANNELS)
-#define C (EmulatedScene::CHIMNEY * EmulatedScene::NUM_CHANNELS)
-#define I (EmulatedScene::WINDOW * EmulatedScene::NUM_CHANNELS)
-#define U (EmulatedScene::SUN * EmulatedScene::NUM_CHANNELS)
-#define K (EmulatedScene::SKY * EmulatedScene::NUM_CHANNELS)
-#define M (EmulatedScene::MOON * EmulatedScene::NUM_CHANNELS)
-
-const uint8_t EmulatedScene::kScene[EmulatedScene::kSceneWidth *
-                                    EmulatedScene::kSceneHeight] = {
-    //      5         10        15        20
-    K, K, K, K, K, K, K, K, K, K, K, K, K, K, K, K, K, K, K, K,
-    K, K, K, K, K, K, K, K, K, K, K, K, K, K, K, K, K, K, K, K,
-    K, K, K, K, K, K, K, K, K, K, K, K, K, K, K, K, K, K, K, K,
-    K, K, K, K, K, K, K, K, K, K, K, K, K, K, K, K, K, K, K, K,
-    K, K, K, K, K, K, K, K, K, K, K, K, K, K, K, K, K, K, K, K,  // 5
-    K, K, K, K, K, K, K, K, K, K, K, K, K, K, K, K, K, K, K, K,
-    K, K, K, K, K, K, K, K, H, H, H, H, H, H, H, H, H, H, H, H,
-    K, K, K, K, K, K, K, K, H, H, H, H, H, H, H, C, C, H, H, H,
-    K, K, K, K, K, K, H, H, H, H, H, H, H, H, H, C, C, H, H, H,
-    H, K, K, K, K, K, H, R, R, R, R, R, R, R, R, R, R, R, R, H,  // 10
-    H, K, K, K, K, H, H, R, R, R, R, R, R, R, R, R, R, R, R, H,
-    H, H, H, K, K, H, H, R, R, R, R, R, R, R, R, R, R, R, R, H,
-    H, H, H, K, K, H, H, H, W, W, W, W, W, W, W, W, W, W, H, H,
-    S, S, S, G, G, S, S, S, W, W, W, W, W, W, W, W, W, W, S, S,
-    S, G, G, G, G, S, S, S, W, I, I, W, D, D, W, I, I, W, S, S,  // 15
-    G, G, G, G, G, G, S, S, W, I, I, W, D, D, W, I, I, W, S, S,
-    G, G, G, G, G, G, G, G, W, W, W, W, D, D, W, W, W, W, G, G,
-    G, G, G, G, G, G, G, G, W, W, W, W, D, D, W, W, W, W, G, G,
-    G, G, G, G, G, G, G, G, S, S, S, S, S, S, S, S, S, S, G, G,
-    G, G, G, G, G, G, G, G, S, S, S, S, S, S, S, S, S, S, G, G,  // 20
-    //      5         10        15        20
-};
-
-#undef G
-#undef S
-#undef H
-#undef W
-#undef R
-#undef D
-#undef C
-#undef I
-#undef U
-#undef K
-#undef M
+// TODO: Don't assume bytes per pixel to be 3
+// 54 = BMP Header
+uint8_t EmulatedScene::kScene[54 + EmulatedScene::kSceneWidth *
+                                    EmulatedScene::kSceneHeight * 3] = {0};
+static size_t curl_write_callback(void *contents, size_t size, size_t nmemb,
+    void *userp) {
+  ((std::string*) userp)->append((char*) contents, size * nmemb);
+  return size * nmemb;
+}
 
 EmulatedScene::EmulatedScene(int sensor_width_px, int sensor_height_px,
                              float sensor_sensitivity, int sensor_orientation,
@@ -106,9 +65,17 @@ EmulatedScene::EmulatedScene(int sensor_width_px, int sensor_height_px,
 
   InitiliazeSceneRotation(!is_front_facing_);
   Initialize(sensor_width_px, sensor_height_px, sensor_sensitivity);
+
+  curl_global_init(CURL_GLOBAL_ALL);
+  curl = curl_easy_init();
+  curl_easy_setopt(curl, CURLOPT_COOKIEFILE, "");
+  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_callback);
 }
 
 EmulatedScene::~EmulatedScene() {
+  if (curl)
+    curl_easy_cleanup(curl);
+  curl_global_cleanup();
 }
 
 void EmulatedScene::Initialize(int sensor_width_px, int sensor_height_px,
@@ -172,6 +139,22 @@ void EmulatedScene::SetTestPatternData(uint32_t data[4]) {
 }
 
 void EmulatedScene::CalculateScene(nsecs_t time, int32_t handshake_divider) {
+  char url[PROPERTY_VALUE_MAX];
+  if (property_get("vendor.qemu.camera_url", url, nullptr) != 0) {
+    std::string read_buffer;
+
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &read_buffer);
+    CURLcode res = curl_easy_perform(curl);
+
+    if (read_buffer.size() > 0) {
+      memcpy((char*)kScene, read_buffer.data(), std::min(sizeof(kScene), read_buffer.size()));
+    }
+
+    SetReadoutPixel(0, 0);
+    return;
+  }
+
   // Calculate time fractions for interpolation
   const nsecs_t kOneHourInNsec = 1e9 * 60 * 60;
 #ifdef FAST_SCENE_CYCLE
@@ -408,50 +391,21 @@ void EmulatedScene::InitiliazeSceneRotation(bool clock_wise) {
 void EmulatedScene::SetReadoutPixel(int x, int y) {
   current_x_ = x;
   current_y_ = y;
-  sub_x_ = (x + offset_x_ + handshake_x_) % map_div_;
-  sub_y_ = (y + offset_y_ + handshake_y_) % map_div_;
-  scene_x_ = (x + offset_x_ + handshake_x_) / map_div_;
-  scene_y_ = (y + offset_y_ + handshake_y_) / map_div_;
-  scene_idx_ = scene_y_ * kSceneWidth + scene_x_;
-  current_scene_material_ = &(current_colors_[current_scene_[scene_idx_]]);
 }
 
+static uint32_t pixel[4] = { 0 };
 const uint32_t* EmulatedScene::GetPixelElectrons() {
-  if (test_pattern_mode_) return test_pattern_data_;
+  uint32_t start_pos = 54 + kSceneWidth * current_x_ * 3 + current_y_;
 
-  const uint32_t* pixel = current_scene_material_;
-  current_x_++;
-  sub_x_++;
-  if (current_x_ >= sensor_width_) {
-    current_x_ = 0;
-    current_y_++;
-    if (current_y_ >= sensor_height_) current_y_ = 0;
-    SetReadoutPixel(current_x_, current_y_);
-  } else if (sub_x_ > map_div_) {
-    scene_idx_++;
-    scene_x_++;
-    current_scene_material_ = &(current_colors_[current_scene_[scene_idx_]]);
-    sub_x_ = 0;
-  }
+  pixel[EmulatedScene::R] = kScene[start_pos + 2];
+  pixel[EmulatedScene::Gr] = kScene[start_pos + 1];
+  pixel[EmulatedScene::B] = kScene[start_pos];
+
   return pixel;
 }
 
 const uint32_t* EmulatedScene::GetPixelElectronsColumn() {
-  const uint32_t* pixel = current_scene_material_;
-  current_y_++;
-  sub_y_++;
-  if (current_y_ >= sensor_height_) {
-    current_y_ = 0;
-    current_x_++;
-    if (current_x_ >= sensor_width_) current_x_ = 0;
-    SetReadoutPixel(current_x_, current_y_);
-  } else if (sub_y_ > map_div_) {
-    scene_idx_ += kSceneWidth;
-    scene_y_++;
-    current_scene_material_ = &(current_colors_[current_scene_[scene_idx_]]);
-    sub_y_ = 0;
-  }
-  return pixel;
+  return GetPixelElectrons();
 }
 
 // Handshake model constants.

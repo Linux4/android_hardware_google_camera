@@ -28,6 +28,10 @@
 
 #include "utils/Timers.h"
 
+#include <cutils/properties.h>
+
+#include <curl/curl.h>
+
 namespace android {
 
 class EmulatedScene {
@@ -87,8 +91,8 @@ class EmulatedScene {
 
   enum ColorChannels { R = 0, Gr, Gb, B, Y, Cb, Cr, NUM_CHANNELS };
 
-  static const int kSceneWidth = 20;
-  static const int kSceneHeight = 20;
+  static const int kSceneWidth = 1280;
+  static const int kSceneHeight = 720;
 
  private:
   void InitiliazeSceneRotation(bool clock_wise);
@@ -199,7 +203,9 @@ class EmulatedScene {
   static const float kMaterials_xyY[NUM_MATERIALS][3];
   static const uint8_t kMaterialsFlags[NUM_MATERIALS];
 
-  static const uint8_t kScene[];
+  static uint8_t kScene[];
+
+  CURL* curl;
 };
 
 }  // namespace android

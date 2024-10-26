@@ -37,6 +37,7 @@ cc_defaults {
         "lib_profiler",
         "libbase",
         "libcamera_metadata",
+        "libcurl",
         "libcutils",
         "libexif",
         "libgralloctypes",
@@ -98,6 +99,7 @@ cc_library_static {
 
     shared_libs: [
         "libcamera_metadata",
+        "libcurl",
         "libcutils",
         "libexif",
         "libjpeg",
